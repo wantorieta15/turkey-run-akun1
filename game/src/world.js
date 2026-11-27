@@ -1,7 +1,24 @@
-// Kalkun Kabur — world.js
+// Kalkun Kabur — world.js (REVISI BESAR Akun 1)
 // Aturan permainan: kalkun berlari ke kanan, petani mengejar dari kiri,
 // rintangan (oven, pagar, jerami, pisau ukir) harus dilompati atau
 // ditundukki, jagung dipungut, tiga babak makin cepat sampai 1500 m.
+//
+// Yang berubah dari builder:
+// - Lompatan pemaaf: coyote time + buffer lompat (lihat config.js). Tekan
+//   lompat sepersekian detik sebelum mendarat tetap melompat; tekan sesaat
+//   setelah kaki meninggalkan tanah tetap melompat. Ini yang paling terasa
+//   bagi pemain manusia; autopilot tidak terpengaruh.
+// - BUG DIPERBAIKI: setelah menunduk lalu berdiri, posisi y kalkun tidak
+//   dikembalikan ke tanah — kalkun tenggelam 20 px ke dalam tanah sampai
+//   lompat berikutnya, dan hitbox-nya ikut tenggelam sehingga pagar/oven
+//   bisa menabrak kalkun yang sebenarnya sudah berdiri. Sekarang setiap
+//   langkah, kalau kalkun di tanah, y selalu dijepit ke GROUND_Y - height.
+// - Celah pasangan 340 px, jeda antar pola 1,05-1,35 detik laju, tekanan
+//   petani dilunakkan (lihat config.js). Jaminan pola: jarak diukur dari
+//   rintangan TERAKHIR pola sebelumnya, dan pola ganda keduanya hanya
+//   pagar/jerami (tidak pernah oven/pisau) supaya selalu bisa dilompati.
+// - Event lompat baru (EVENT_JUMP) supaya main.js bisa membunyikan suara
+//   lompat tepat saat kalkun meninggalkan tanah.
 
 import { GROUND_Y, OBSTACLES, PICKUPS, RUN, STAGES, TURKEY } from './config.js';
 import { chance, makeRng, pick, range } from './random.js';
@@ -13,6 +30,7 @@ export const EVENT_STAGE = 4;
 export const EVENT_CAUGHT = 8;
 export const EVENT_ESCAPED = 16;
 export const EVENT_SURGE = 32;
+export const EVENT_JUMP = 64;
 
 const STEP = 1 / 60;
 
@@ -28,6 +46,10 @@ function makeTurkey() {
     invulnerable: 0,
     runCycle: 0,
     squash: 0,
+    // Jendela pengampunan input: diisi saat tombol lompat ditekan, dipakai
+    // saat kalkun mendarat; diisi saat kalkun meninggalkan tanah (coyote).
+    jumpBuffer: 0,
+    coyote: 0,
   };
 }
 
@@ -124,21 +146,26 @@ export class World {
     this.obstacles.push(obstacle);
     let rightEdge = x + spec.width;
 
-    // Kadang sepasang rintangan dengan celah 300 px: cukup untuk mendarat
-    // lalu lompat lagi, bahkan pada kecepatan tertinggi.
+    // Kadang sepasang rintangan dengan celah 340 px: cukup untuk mendarat
+    // lalu lompat lagi, bahkan pada kecepatan tertinggi — lompatan
+    // menempuh ~396 px di kecepatan maks, jadi kalkun mendarat ~249 px
+    // setelah tepi depan rintangan pertama dan masih punya ~165 px untuk
+    // lompat lagi sebelum rintangan kedua.
+    // Rintangan kedua SELALU pagar/jerami (pendek), tidak pernah oven/pisau,
+    // supaya pasangan ini tidak pernah mustahil.
     if (chance(this.rng, stage === 0 ? 0.18 : 0.30)) {
       const secondKind = pick(this.rng, ['fence', 'hay']);
       const second = OBSTACLES[secondKind];
       this.obstacles.push({
         kind: secondKind,
-        x: x + spec.width + 300,
+        x: x + spec.width + RUN.pairGap,
         y: GROUND_Y - second.height,
         width: second.width,
         height: second.height,
         passed: false,
         swing: 0,
       });
-      rightEdge = x + spec.width + 300 + second.width;
+      rightEdge = x + spec.width + RUN.pairGap + second.width;
     }
 
     // Jagung di jalur: di tanah, atau di busur lompatan di atas rintangan.
@@ -198,16 +225,16 @@ export class World {
       this.say(`BABAK ${stageIndex + 1}: ${STAGES[stageIndex].name} — MAKIN CEPAT!`, 2.4);
     }
 
-    // Petani mengejar: celah menyusut pelan (2,5 px/detik) kalau tidak ada
-    // yang memperbaikinya; lari bersih dan pungutan membesarkannya lagi.
-    this.gap -= 2.5 * dt;
+    // Petani mengejar: celah menyusut pelan kalau tidak ada yang
+    // memperbaikinya; lari bersih dan pungutan membesarkannya lagi.
+    this.gap -= RUN.gapDecayPerSecond * dt;
     if (this.gap > RUN.maxGap) this.gap = RUN.maxGap;
 
     // Serbuan petani berkala: peringatan lalu celah mengecil.
     this.surgeTimer -= dt;
     if (this.surgeTimer <= 0) {
       this.surgeTimer = range(this.rng, 12, 16);
-      this.gap -= 50;
+      this.gap -= RUN.surgeGap;
       this.surgeFlash = 1.4;
       this.say('PETANI MENDEKAT! LARI!', 1.4);
       events |= EVENT_SURGE;
@@ -222,14 +249,29 @@ export class World {
     if (p.invulnerable > 0) p.invulnerable -= dt;
     if (this.shield > 0) this.shield -= dt;
 
+    // Buffer lompat: tekanan yang datang sesaat sebelum mendarat disimpan
+    // dan dipakai begitu kaki menyentuh tanah.
+    if (input.jump) p.jumpBuffer = TURKEY.jumpBufferSeconds;
+    else if (p.jumpBuffer > 0) p.jumpBuffer -= dt;
+    if (p.onGround) p.coyote = TURKEY.coyoteSeconds;
+    else if (p.coyote > 0) p.coyote -= dt;
+
     const wantDuck = input.duck && p.onGround;
     p.ducking = wantDuck;
     p.height = wantDuck ? TURKEY.duckHeight : TURKEY.height;
-    if (wantDuck) p.y = GROUND_Y - TURKEY.duckHeight;
+    // PERBAIKAN BUG (revisi): kalau di tanah, kaki SELALU di garis tanah.
+    // Sebelumnya, setelah menunduk lalu berdiri, y tetap di posisi menunduk
+    // (tenggelam 20 px) sampai lompat berikutnya — gambar dan hitbox salah.
+    if (p.onGround) p.y = GROUND_Y - p.height;
 
-    if (input.jump && p.onGround && !wantDuck) {
+    // Lompat dari tanah, atau dari coyote time, atau dari buffer yang
+    // ditekan sesaat sebelum mendarat. Tidak bisa lompat sambil menunduk.
+    if ((p.jumpBuffer > 0 && p.coyote > 0) && !wantDuck) {
       p.vy = TURKEY.jumpVelocity;
       p.onGround = false;
+      p.coyote = 0;
+      p.jumpBuffer = 0;
+      events |= EVENT_JUMP;
     }
     if (!p.onGround) {
       p.vy += TURKEY.gravity * dt;
@@ -258,13 +300,13 @@ export class World {
     // Spawn pola berikutnya. Jarak diukur dari rintangan TERAKHIR pola
     // sebelumnya (termasuk gandaannya), bukan dari awal pola — supaya dua
     // pola tidak pernah bertumpuk dan selalu ada ruang mendarat.
-    // Jaraknya berbasis WAKTU (0,95–1,25 detik laju), bukan piksel, supaya
+    // Jaraknya berbasis WAKTU (1,05–1,35 detik laju), bukan piksel, supaya
     // lompatan yang makin jauh pada kecepatan tinggi tetap mendarat di
     // antara rintangan, bukan di atas rintangan berikutnya.
     this.nextSpawnX -= dx;
     if (this.nextSpawnX < 960) {
-      const gapSeconds = range(this.rng, 0.95, 1.25) - this.stageIndex * 0.03;
-      const gapPx = Math.max(300, this.speed * gapSeconds);
+      const gapSeconds = range(this.rng, RUN.spawnGapSecondsMin, RUN.spawnGapSecondsMax) - this.stageIndex * 0.03;
+      const gapPx = Math.max(RUN.pairGap, this.speed * gapSeconds);
       const rightEdge = this.spawnPattern(960 + 60);
       this.nextSpawnX = 960 + (rightEdge - (960 + 60)) + gapPx;
     }
@@ -296,7 +338,7 @@ export class World {
         } else {
           this.lives -= 1;
           p.invulnerable = 1.4;
-          this.gap -= 64;
+          this.gap -= RUN.hitGap;
           events |= EVENT_HIT;
           this.say(obstacle.kind === 'oven' ? 'ADUH! OVEN PANAS!' : obstacle.kind === 'knife' ? 'AWAS PISAU UKIR!' : 'TERSANDUNG!', 1.4);
           if (this.lives <= 0) {

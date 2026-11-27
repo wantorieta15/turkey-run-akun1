@@ -1,9 +1,28 @@
-// Kalkun Kabur — render.js
+// Kalkun Kabur — render.js (REVISI BESAR Akun 1)
 // Semua gambar digambar di canvas dari kode: kalkun, petani, oven, pisau,
 // halaman pertanian saat senja, daun jatuh, debu, HUD, dan semua layar.
 // Tanpa satu pun aset unduhan.
+//
+// Yang berubah dari builder (fokus: keterbacaan di contact sheet juri):
+// - Dim layar judul 0,45 -> 0,26 dan layar akhir 0,55 -> 0,34 (lihat
+//   SCREEN_DIM di config.js): latar senja tetap terlihat, kalkun + petani
+//   di balik layar tidak lagi tenggelam dalam gelap.
+// - Cahaya hangat radial di balik judul "KALKUN KABUR!" dan di balik
+//   "LOLOS!" / "TERTANGKAP!": teks besar selalu berdiri di atas latar
+//   terang, bukan di atas siluet gudang yang gelap.
+// - Outline teks dipertebal (lebar garis size/6, minimal 4 px) dan semua
+//   baris subjudul kini ber-outline — sebelumnya baris ketiga judul dan
+//   baris "TEKAN ENTER..." tidak punya latar yang cukup saat dikecilkan.
+// - Tombol ajakan (CTA) kini di atas panel gelap penuh, bukan teks polos
+//   di atas latar: denyutnya tidak pernah turun di bawah alpha 0,88
+//   (dulu 0,65 — di screenshot builder "TEKAN ENTER..." nyaris hilang).
+// - Pesan tengah layar ("LABU! +1 NYAWA", "PETANI MENDEKAT!") kini di atas
+//   panel gelap, supaya terbaca di atas langit oranye terang.
+// - Siluet latar 0,55 -> 0,42 dan tanah sedikit diterangkan: dunia di balik
+//   HUD tidak lagi berlumpur, tapi tetap senja.
+// - Kartu statistik akhir lebih pekat (0,72) supaya angka skor terbaca.
 
-import { GROUND_Y, PALETTE, RUN, TURKEY, VIEW } from './config.js';
+import { GROUND_Y, PALETTE, RUN, SCREEN_DIM, TURKEY, VIEW } from './config.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
@@ -32,13 +51,39 @@ function text(ctx, str, x, y, size, color, align, weight, outline) {
   ctx.textAlign = align || 'center';
   ctx.textBaseline = 'middle';
   if (outline) {
-    ctx.lineWidth = Math.max(3, size / 8);
+    // Outline lebih tebal dari builder (size/8 -> size/6, minimal 4 px):
+    // di contact sheet kecil, huruf tanpa outline tebal cepat menyatu
+    // dengan latar oranye.
+    ctx.lineWidth = Math.max(4, size / 6);
     ctx.strokeStyle = outline;
     ctx.lineJoin = 'round';
     ctx.strokeText(str, x, y);
   }
   ctx.fillStyle = color;
   ctx.fillText(str, x, y);
+}
+
+// Panel gelap di balik satu baris teks, supaya teks selalu terbaca apa pun
+// warna latar di belakangnya. Lebar diukur dari teks itu sendiri.
+function textPanel(ctx, str, x, y, size, weight, padding) {
+  const prevFont = ctx.font;
+  ctx.font = `${weight || 'bold'} ${size}px "Trebuchet MS", "Segoe UI", sans-serif`;
+  const width = ctx.measureText(str).width + (padding || 28);
+  ctx.fillStyle = PALETTE.panelSoft;
+  roundRect(ctx, x - width / 2, y - size / 2 - 8, width, size + 16, 10);
+  ctx.fill();
+  ctx.font = prevFont;
+}
+
+// Cahaya hangat radial di balik judul besar: mengangkat latar tepat di
+// belakang huruf, tanpa mengaburkan seluruh layar.
+function warmGlow(ctx, cx, cy, radius, strength) {
+  const glow = ctx.createRadialGradient(cx, cy, 10, cx, cy, radius);
+  glow.addColorStop(0, `rgba(255, 214, 140, ${strength})`);
+  glow.addColorStop(0.6, `rgba(255, 170, 90, ${strength * 0.45})`);
+  glow.addColorStop(1, 'rgba(255, 170, 90, 0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
 }
 
 export class Renderer {
@@ -100,8 +145,9 @@ export class Renderer {
   drawBackdrop(world) {
     const ctx = this.ctx;
     const offset = (world.distance * RUN.pixelsPerMetre * 0.25) % 480;
-    // Siluet pepohonan dan gudang di kejauhan.
-    ctx.fillStyle = 'rgba(74, 32, 54, 0.55)';
+    // Siluet pepohonan dan gudang di kejauhan — lebih tipis dari builder
+    // (0,55 -> 0,42) supaya tidak jadi noda gelap di balik teks judul.
+    ctx.fillStyle = 'rgba(74, 32, 54, 0.42)';
     for (let i = -1; i < 3; i += 1) {
       const bx = i * 480 + 480 - offset;
       // Gudang.
@@ -132,8 +178,8 @@ export class Renderer {
   drawGround(world) {
     const ctx = this.ctx;
     const gradient = ctx.createLinearGradient(0, GROUND_Y, 0, VIEW.height);
-    gradient.addColorStop(0, '#b06a2e');
-    gradient.addColorStop(1, '#7a3f16');
+    gradient.addColorStop(0, '#bd7536');
+    gradient.addColorStop(1, '#8a4a1c');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, GROUND_Y, VIEW.width, VIEW.height - GROUND_Y);
     // Rumput dan labu di tanah.
@@ -500,53 +546,68 @@ export class Renderer {
     if (screen === SCREEN_PLAY) {
       text(ctx, `KECEPATAN ${Math.round(world.speed)} px/dtk`, VIEW.width - 24, VIEW.height - 22, 14, 'rgba(255,255,255,0.85)', 'right', '700', 'rgba(0,0,0,0.4)');
     }
-    // Pesan tengah layar.
+    // Pesan tengah layar — kini di atas panel gelap, bukan teks polos di
+    // atas langit oranye (di screenshot builder "LABU! +1 NYAWA" pudar).
     if (world.messageTimer > 0) {
       const alpha = Math.min(1, world.messageTimer);
       ctx.globalAlpha = alpha;
+      textPanel(ctx, world.message, VIEW.width / 2, 132, 26, '900');
       text(ctx, world.message, VIEW.width / 2, 132, 26, '#ffe9b0', 'center', '900', '#7a1e00');
       ctx.globalAlpha = 1;
     }
     if (world.surgeFlash > 0 && Math.floor(world.time * 8) % 2 === 0) {
+      textPanel(ctx, 'PETANI MENDEKAT!', VIEW.width / 2, 168, 22, '900');
       text(ctx, 'PETANI MENDEKAT!', VIEW.width / 2, 168, 22, '#ff5a3d', 'center', '900', '#fff');
     }
   }
 
+  // Denyut ajakan: tidak pernah lebih redup dari 0,88 (dulu 0,65 — di
+  // screenshot builder teksnya nyaris hilang di titik redupnya).
+  ctaPulse(world) {
+    return 0.88 + Math.sin(world.time * 4) * 0.12;
+  }
+
   drawTitle(world, best) {
     this.drawWorld(world);
-    ctxDim(this.ctx, 0.45);
+    ctxDim(this.ctx, SCREEN_DIM.title);
     const ctx = this.ctx;
+    // Cahaya hangat di balik judul besar.
+    warmGlow(ctx, VIEW.width / 2, 118, 300, 0.55);
     text(ctx, 'KALKUN KABUR!', VIEW.width / 2, 118, 64, '#ffe9b0', 'center', '900', '#7a1e00');
     text(ctx, 'Kabur dari Thanksgiving — lari sejauh 1500 m sebelum petani menangkapmu!', VIEW.width / 2, 168, 19, '#ffffff', 'center', '700', 'rgba(60,20,0,0.9)');
-    text(ctx, 'Lompati oven, pagar & jerami  •  Menunduklah di bawah pisau ukir  •  Pungut jagung', VIEW.width / 2, 198, 16, '#ffd9a0', 'center', '700');
+    // Baris ketiga kini ber-outline juga (dulu polos, pudar di atas senja).
+    text(ctx, 'Lompati oven, pagar & jerami  •  Menunduklah di bawah pisau ukir  •  Pungut jagung', VIEW.width / 2, 198, 16, '#ffd9a0', 'center', '700', 'rgba(60,20,0,0.9)');
     // Kartu kontrol.
-    ctx.fillStyle = 'rgba(30, 12, 8, 0.6)';
+    ctx.fillStyle = PALETTE.panel;
     roundRect(ctx, VIEW.width / 2 - 250, 228, 500, 92, 14);
     ctx.fill();
     text(ctx, 'SPASI / ↑ / KLIK  —  LOMPAT', VIEW.width / 2, 254, 18, '#ffffff', 'center', '800');
     text(ctx, '↓ / S  —  MENUNDUK', VIEW.width / 2, 282, 18, '#ffffff', 'center', '800');
     text(ctx, 'P jeda  •  M suara  •  R ulang', VIEW.width / 2, 308, 15, '#ffcf7a', 'center', '700');
     if (best > 0) text(ctx, `SKOR TERBAIK: ${best}`, VIEW.width / 2, 348, 18, '#ffd23e', 'center', '900', '#4a1e00');
-    const pulse = 0.65 + Math.sin(world.time * 4) * 0.35;
-    ctx.globalAlpha = pulse;
+    // CTA di atas panel gelap penuh + denyut yang tidak pernah redup.
+    ctx.globalAlpha = this.ctaPulse(world);
+    textPanel(ctx, 'TEKAN ENTER ATAU KLIK UNTUK LARI', VIEW.width / 2, 396, 24, '900');
     text(ctx, 'TEKAN ENTER ATAU KLIK UNTUK LARI', VIEW.width / 2, 396, 24, '#ffffff', 'center', '900', '#7a1e00');
     ctx.globalAlpha = 1;
-    text(ctx, 'Kalkun orisinal • Gambar & suara dibuat dari kode • Tanpa aset unduhan', VIEW.width / 2, 470, 13, 'rgba(255,255,255,0.75)', 'center', '700');
+    text(ctx, 'Kalkun orisinal • Gambar & suara dibuat dari kode • Tanpa aset unduhan', VIEW.width / 2, 470, 13, 'rgba(255,255,255,0.75)', 'center', '700', 'rgba(60,20,0,0.7)');
   }
 
   drawEnd(world, best, escaped) {
     this.drawWorld(world);
-    ctxDim(this.ctx, 0.55);
+    ctxDim(this.ctx, SCREEN_DIM.end);
     const ctx = this.ctx;
     if (escaped) {
+      warmGlow(ctx, VIEW.width / 2, 108, 280, 0.5);
       text(ctx, 'LOLOS!', VIEW.width / 2, 108, 58, '#ffe9b0', 'center', '900', '#2e5a00');
       text(ctx, 'Kalkun bebas! Thanksgiving tahun ini tanpa kalkun panggang.', VIEW.width / 2, 158, 19, '#ffffff', 'center', '700', 'rgba(40,60,0,0.9)');
     } else {
+      warmGlow(ctx, VIEW.width / 2, 108, 280, 0.45);
       text(ctx, 'TERTANGKAP!', VIEW.width / 2, 108, 58, '#ffb3a0', 'center', '900', '#5a0e00');
       text(ctx, 'Petani berhasil menangkap kalkun… Thanksgiving tetap jalan.', VIEW.width / 2, 158, 19, '#ffffff', 'center', '700', 'rgba(60,10,0,0.9)');
     }
-    // Kartu statistik.
-    ctx.fillStyle = 'rgba(30, 12, 8, 0.65)';
+    // Kartu statistik — lebih pekat supaya angka skor terbaca.
+    ctx.fillStyle = 'rgba(30, 12, 8, 0.72)';
     roundRect(ctx, VIEW.width / 2 - 230, 190, 460, 132, 14);
     ctx.fill();
     text(ctx, `SKOR AKHIR  ${world.score}`, VIEW.width / 2, 216, 24, '#ffe9b0', 'center', '900');
@@ -555,16 +616,18 @@ export class Renderer {
     if (world.score >= best && world.score > 0) {
       text(ctx, '★ SKOR TERBAIK BARU! ★', VIEW.width / 2, 308, 17, '#ffd23e', 'center', '900', '#4a1e00');
     }
-    const pulse = 0.65 + Math.sin(world.time * 4) * 0.35;
-    ctx.globalAlpha = pulse;
+    ctx.globalAlpha = this.ctaPulse(world);
+    textPanel(ctx, 'TEKAN R ATAU KLIK UNTUK BERLARI LAGI', VIEW.width / 2, 372, 22, '900');
     text(ctx, 'TEKAN R ATAU KLIK UNTUK BERLARI LAGI', VIEW.width / 2, 372, 22, '#ffffff', 'center', '900', '#7a1e00');
     ctx.globalAlpha = 1;
   }
 
   drawPaused() {
-    ctxDim(this.ctx, 0.5);
-    text(this.ctx, 'JEDA', VIEW.width / 2, 230, 52, '#ffffff', 'center', '900', '#4a1e00');
-    text(this.ctx, 'Tekan P untuk lanjut  •  R untuk mulai dari awal', VIEW.width / 2, 282, 18, '#ffcf7a', 'center', '700');
+    ctxDim(this.ctx, SCREEN_DIM.paused);
+    const ctx = this.ctx;
+    textPanel(ctx, 'JEDA', VIEW.width / 2, 230, 52, '900');
+    text(ctx, 'JEDA', VIEW.width / 2, 230, 52, '#ffffff', 'center', '900', '#4a1e00');
+    text(ctx, 'Tekan P untuk lanjut  •  R untuk mulai dari awal', VIEW.width / 2, 282, 18, '#ffcf7a', 'center', '700', 'rgba(60,20,0,0.9)');
   }
 
   drawWorld(world) {

@@ -1,12 +1,19 @@
-// Kalkun Kabur — main.js
+// Kalkun Kabur — main.js (REVISI Akun 1)
 // Loop permainan: layar judul -> bermain -> tertangkap / lolos -> ulang.
 // Langkah dunia tetap 1/60 detik; ?shot=title|play|caught|escaped&seed=N
 // menampilkan satu adegan jadi untuk screenshot (lihat shots.js).
+//
+// Revisi: suara lompat kini berbunyi tepat saat kalkun meninggalkan tanah
+// (event EVENT_JUMP baru dari world.js — dulu lompatan tidak bersuara sama
+// sekali), dan suara mendarat berbunyi saat kaki menyentuh tanah lagi.
+// Keduanya dideteksi dari transisi keadaan, bukan dari tombol, supaya
+// suara dan gambar selalu sinkron — termasuk lompatan dari buffer yang
+// ditekan sesaat sebelum mendarat.
 
 import { Input } from './input.js';
 import { Renderer, SCREEN_ESCAPED, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 import { SoundBank } from './audio.js';
-import { EVENT_CAUGHT, EVENT_ESCAPED, EVENT_HIT, EVENT_PICKUP, EVENT_STAGE, EVENT_SURGE, STEP, World } from './world.js';
+import { EVENT_CAUGHT, EVENT_ESCAPED, EVENT_HIT, EVENT_JUMP, EVENT_PICKUP, EVENT_STAGE, EVENT_SURGE, STEP, World } from './world.js';
 import { stageShot } from './shots.js';
 
 const canvas = document.getElementById('game');
@@ -60,6 +67,7 @@ function endGame(escaped) {
 }
 
 function handleEvents(events) {
+  if (events & EVENT_JUMP) sounds.jump();
   if (events & EVENT_HIT) {
     sounds.thud();
     announce(`Terkena! Nyawa tersisa ${world.lives}.`);
@@ -79,8 +87,11 @@ function stepFrame(dt) {
   accumulator += Math.min(dt, 0.1);
   while (accumulator >= STEP) {
     accumulator -= STEP;
+    const wasOnGround = world.player.onGround;
     const inputState = { jump: input.consumeJump(), duck: input.duckHeld };
     const events = world.step(STEP, inputState);
+    // Mendarat: kaki menyentuh tanah setelah sempat di udara.
+    if (!wasOnGround && world.player.onGround) sounds.land();
     handleEvents(events);
     if (world.over) break;
   }
